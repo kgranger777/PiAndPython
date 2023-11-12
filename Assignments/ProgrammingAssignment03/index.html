@@ -1,0 +1,26 @@
+<!DOCTYPE HTML>
+<html style="display: table; margin: auto; background-color: teal;">
+	<head>
+		<title>Assignment 03</title>
+	</head>
+	<body style="display: table-cell; vertical-align: middle; font-family: Arial, sans-serif; background-color: beige; padding-left: 350px; padding-right: 350px; padding-top: 10px; padding-bottom: 100%; font-size: 18pt">
+		<h1 style="font-weight: bold; border-bottom: 2px solid; padding: 10px; text-align: center;">LED Control Web Server</h1>
+		<p>Use the buttons below to toggle LED State.</p>
+
+
+		<form action="/send" method="post" style="padding-bottom: 10px; font-size:12pt">
+			Red Slider:
+			<input type="range" min="0" max="100" value="50" class="slider" id="redSlider">
+			Green Slider:
+			<input type="range" min="0" max="100" value="50" class="slider" id="greenSlider">
+			Blue Slider:
+			<input type="range" min="0" max="100" value="50" class="slider" id="blueSlider">
+			</div>
+
+			<input type="submit" name="command" value="LED Toggle" />
+			<input type="submit" name="command" value="LED Update" />
+		</form>
+		
+		<p id="doorState">The door is closed</p>
+	</body>
+</html>
