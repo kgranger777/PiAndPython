@@ -3,7 +3,8 @@
 # Assignment: Programming Assignment 04
 # File: granger04.py
 # Purpose: Python 3 code sets up GUI and TCP server to change colors of an LED via PWM. The color data is input via
-# the GUI and sent to the server by pressing a hardware button.
+#          the GUI and data is sent to the server by pressing a hardware button. 
+#          The server and client are threaded and run concurrently.
 #
 #           NOTE: Works with COMMON ANODE LED (Positive long lead)
 #
@@ -11,19 +12,14 @@
 # Operating System: Raspbian (Debian) Linux 11 "Bullseye"
 # Environment: Python 3.9.2
 # IDE: Sublime Text
-# Operational status: TODO UPDATE STATUS
+# Operational status: Fully functional
 #########
 
-# Using the same circuit from assignment 3 (shown below for reference), create a server on port 9000 (NOT a web server)
-# that listens for data from a GUI application to control the lights.
-# In this case, since you're sending commands, you will need to have a button to send the data to the server.
-# Control the colors of the LED like before, toggle the LED, blink the LED (make it blink five times, returning it to
-# its previous state before you started blinking. This is actually the easier way to do it.)
-# Don't worry about the "Door" button.
-# Send the data in whatever format you want, but do not use an HTML server this time.
+import RPi.GPIO as GPIO
 import tkinter as Tk
 from socket import *
 from threading import Thread
+from time import sleep
 
 # Set up pins
 redPin = 11
@@ -81,10 +77,9 @@ def toggleLED():
         print("DEBUG: Turned LED on")
 
 
-# # Event detectors for button presses
-# GPIO.add_event_detect(powerButton, GPIO.FALLING, callback=updateServer, bouncetime=300)
-
-
+# Server class inherits from Thread class to allow parallel client and server in one file.
+# Class sets up a TCP server using a given address and port, then continually listens for incoming data from a client. The data
+# is used to control the LED or to shut down the program.
 class Server(Thread):
     def __init__(self, addr, port):
         self.addr = addr
@@ -92,11 +87,14 @@ class Server(Thread):
         # Buffer size defined as 10k bytes
         self.buffer = 10000
         self.socket = socket(AF_INET, SOCK_STREAM)
+        # Allow address reuse
+        self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         self.socket.bind((self.addr, self.port))
         # Run thread initialization
         Thread.__init__(self)
 
     def run(self):
+        global current_pwm
         # Backlog size defined as 10k
         self.socket.listen(10000)
         while True:
@@ -118,6 +116,7 @@ class Server(Thread):
                 # Blink LED 5 times by toggling 10 times
                 for _ in range(10):
                     toggleLED()
+                    sleep(0.2)
             if code == 'pwm_r':
                 # Update Red PWM
                 current_pwm[0] = data
@@ -130,12 +129,10 @@ class Server(Thread):
                 # Update Blue PWM
                 current_pwm[2] = data
                 updateLED()
-
-            # NOTE shouldn't need to send data from the server, but if I do, here's how to do it...
-            # # Test data sending:
-            # send_data = data.decode()[::-1]
-            # print("Server: Sending", send_data)
-            # client_connection.send(send_data.encode())
+            if code == 'update':
+                # Update LED with current data
+                print(f"Updating LED with PWM values R: {current_pwm[0]}, G: {current_pwm[1]}, B: {current_pwm[2]}")
+                updateLED()
 
             # If user wants to quit, close client socket, break out of loop, and shutdown server.
             if code == 'quit':
@@ -148,42 +145,14 @@ class Server(Thread):
         print("Shutting down Server")
         turnAllOff()
         GPIO.cleanup()
+        self.socket.shutdown(SHUT_RDWR)
         self.socket.close()
         return
 
 
-# class Client:
-#     # class Client(Thread):
-#     def __init__(self, addr, port):
-#         self.addr = addr
-#         self.port = port
-#         # Buffer size defined as 10k bytes
-#         self.buffer = 10000
-#         self.socket = socket(AF_INET, SOCK_STREAM)
-#         # Thread.__init__(self)
-#
-#     def send(self):
-#         self.socket.connect((self.addr, self.port))
-#         # user_input = input("Input a string to be sent")
-#         user_input = "This is a test string"
-#         # user_input.encode()
-#
-#         print("Client: Sending", user_input.encode())
-#         self.socket.send(user_input.encode())
-#
-#     def receive(self):
-#         # Receive 10k bytes
-#         data = self.socket.recv(10000)
-#         print("Client: Received", data.decode())
-#         self.close()
-#
-#     # Close socket when done
-#     def close(self):
-#         print("Shutting down Client")
-#         self.socket.close()
-
-
 # Begin GUI Application class
+# Application client sets up GUI and adds event handlers to Tkinter control elements. Client also handles data 
+# send requests to a server running on TCP.
 class Application(Tk.Frame):
     # Initialize red, green, and blue slider variables
     root = Tk.Tk()
@@ -196,17 +165,18 @@ class Application(Tk.Frame):
         # Initialize passed variables
         self.addr = addr
         self.port = port
-        # Buffer size defined as 10k bytes
-        self.buffer = 10000
 
         # Set up GUI
         Tk.Frame.__init__(self, master)
         self.grid(sticky='nsew')
         self.createWidgets()
 
+        # Set up event detector for button press - updates server
+        GPIO.add_event_detect(sendButton, GPIO.FALLING, callback=self.updateServer, bouncetime=300)
+
     def send(self, code, data):
         self.socket = socket(AF_INET, SOCK_STREAM)
-        # # Connect socket once GUI is set up
+        # Connect socket once GUI is set up
         self.socket.connect((self.addr, self.port))
 
         message = "(\"" + code + "\", " + str(data) + ")"
@@ -235,6 +205,8 @@ class Application(Tk.Frame):
     def quit(self):
         self.send('quit', 0)
         self.destroy()
+        self.socket.shutdown(SHUT_RDWR)
+        self.socket.close()
         quit()
 
     def createWidgets(self):
@@ -244,38 +216,65 @@ class Application(Tk.Frame):
         self.blinkButton = Tk.Button(self, text="Blink LED 5 Times", command=self.blinkLED)
         self.blinkButton.grid(sticky='ew', padx=(50, 50), pady=(5, 5))
 
+        self.redLabel = Tk.Label(self, text="Red:")
+        self.redLabel.grid(sticky='ew', padx=(50, 50), pady=(5, 0))
         self.redSlider = Tk.Scale(self, from_=100, to=0, orient=Tk.HORIZONTAL, command=self.updateRed,
                                   variable=self.red_value)
-        self.redSlider.grid(sticky='ew', padx=(50, 50), pady=(5, 5))
+        self.redSlider.grid(sticky='ew', padx=(50, 50), pady=(0, 5))
 
+        self.greenLabel = Tk.Label(self, text="Green:")
+        self.greenLabel.grid(sticky='ew', padx=(50, 50), pady=(5, 0))
         self.greenSlider = Tk.Scale(self, from_=100, to=0, orient=Tk.HORIZONTAL, command=self.updateGreen,
                                     variable=self.green_value)
-        self.greenSlider.grid(sticky='ew', padx=(50, 50), pady=(5, 5))
+        self.greenSlider.grid(sticky='ew', padx=(50, 50), pady=(0, 5))
 
+        self.blueLabel = Tk.Label(self, text="Blue:")
+        self.blueLabel.grid(sticky='ew', padx=(50, 50), pady=(5, 0))
         self.blueSlider = Tk.Scale(self, from_=100, to=0, orient=Tk.HORIZONTAL, command=self.updateBlue,
                                    variable=self.blue_value)
-        self.blueSlider.grid(sticky='ew', padx=(50, 50), pady=(5, 5))
+        self.blueSlider.grid(sticky='ew', padx=(50, 50), pady=(0, 5))
 
         self.quitButton = Tk.Button(self, text="Quit", command=self.quit)
         self.quitButton.grid(sticky='ew', padx=(50, 50), pady=(5, 10))
 
 
+    # Button callback function sends update code to server when pressed
+    def updateServer(self, channel):
+        # addr, port set at init
+        self.socket = socket(AF_INET, SOCK_STREAM)
+        self.socket.connect((self.addr, self.port))
+
+        # Send update code to server
+        code = 'update'
+        data = 0
+        message = "(\"" + code + "\", " + str(data) + ")"
+        print("Client: Sending", message)
+        self.socket.send(message.encode())
+
+
 def main():
-    # Change address and port here
+    global red, green, blue
+
+    # Start PWM
+    red.start(100)
+    green.start(100)
+    blue.start(100)
+
+    # Declare address and port for client and server
     addr = "localhost"
     port = 9000
 
     # Sets up threaded instance of server
-    th_server = Server(addr, port)
+    server = Server(addr, port)
     # Sets up new client application to send data to server from GUI
     app = Application(addr, port)
 
     # Start server and application
-    th_server.start()
+    server.start()
     app.mainloop()
 
     # Wait for server to finish
-    th_server.join()
+    server.join()
 
 
 if __name__ == '__main__':
